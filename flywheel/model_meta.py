@@ -4,6 +4,7 @@ import time
 
 import inspect
 from dynamo3 import DynamoKey, LocalIndex, GlobalIndex, Throughput
+from dynamo3.exception import DynamoDBError
 from collections import defaultdict
 
 from .fields import Field
@@ -416,10 +417,8 @@ class ModelMetadata(object):
         """
         if self.abstract:
             return None
-        if tablenames is None:
-            tablenames = set(connection.list_tables())
         tablename = self.ddb_tablename(namespace)
-        if tablename in tablenames:
+        if connection.describe_table(tablename) is not None:
             return None
         elif test:
             return tablename
@@ -452,8 +451,19 @@ class ModelMetadata(object):
             global_indexes.append(index)
 
         if not test:
-            connection.create_table(tablename, hash_key, range_key,
-                                    indexes, global_indexes, table_throughput)
+            waits = 60
+            while waits:
+                try:
+                    connection.create_table(tablename, hash_key, range_key,
+                                            indexes, global_indexes, table_throughput)
+                except DynamoDBError as e:
+                    if e.kwargs['Code'] == 'ResourceInUseException':
+                        waits -= 1
+                    else:
+                        raise e
+                else:
+                    break
+                time.sleep(1)
             if wait:
                 desc = connection.describe_table(tablename)
                 while desc.status != 'ACTIVE':
